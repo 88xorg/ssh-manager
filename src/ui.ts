@@ -12,6 +12,11 @@ const CLEAR_LINE = "\x1b[2K";
 const HIDE_CURSOR = "\x1b[?25l";
 const SHOW_CURSOR = "\x1b[?25h";
 
+// #AEFF00 as 24-bit ANSI color
+const ACCENT_FG = "\x1b[38;2;174;255;0m";
+const ACCENT_DIM = "\x1b[38;2;100;148;0m";
+const SHADOW = "\x1b[38;2;50;74;0m";
+
 export const c = {
   bold: (s: string) => `${BOLD}${s}${RESET}`,
   dim: (s: string) => `${DIM}${s}${RESET}`,
@@ -19,7 +24,50 @@ export const c = {
   green: (s: string) => `${GREEN}${s}${RESET}`,
   cyan: (s: string) => `${CYAN}${s}${RESET}`,
   yellow: (s: string) => `${YELLOW}${s}${RESET}`,
+  accent: (s: string) => `${ACCENT_FG}${s}${RESET}`,
+  accentBold: (s: string) => `${BOLD}${ACCENT_FG}${s}${RESET}`,
+  accentDim: (s: string) => `${ACCENT_DIM}${s}${RESET}`,
+  shadow: (s: string) => `${SHADOW}${s}${RESET}`,
 };
+
+// Bright accent for primary geometry, dim for mid-tones, shadow for depth
+const A = `${ACCENT_FG}${BOLD}`;   // bright face
+const D = `${ACCENT_DIM}`;         // mid-tone details
+const S = `${SHADOW}`;             // dark shadow / depth
+const R = RESET;
+
+// Strip ANSI codes to measure visible character width
+function visLen(s: string): number {
+  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
+// Pad a content line and wrap it in the frame border
+function row(content: string): string {
+  const W = 68; // inner width between │ and │
+  const pad = Math.max(0, W - visLen(content));
+  return `${D}  │${R}${content}${" ".repeat(pad)}${D}│${R}`;
+}
+
+const BANNER = [
+  `${D}  ┌${"─".repeat(68)}┐${R}`,
+  row(""),
+  row(`   ${A}███████╗███████╗██╗  ██╗${R}`),
+  row(`   ${A}██╔════╝██╔════╝██║  ██║${R}`),
+  row(`   ${A}███████╗███████╗███████║${R}`),
+  row(`   ${A}╚════██║╚════██║██╔══██║${R}`),
+  row(`   ${A}███████║███████║██║  ██║${R}`),
+  row(`   ${S}╚══════╝╚══════╝╚═╝  ╚═╝${R}`),
+  row(`   ${A}███╗   ███╗ █████╗ ███╗   ██╗ █████╗  ██████╗ ███████╗██████╗ ${R}`),
+  row(`   ${A}████╗ ████║██╔══██╗████╗  ██║██╔══██╗██╔════╝ ██╔════╝██╔══██╗${R}`),
+  row(`   ${A}██╔████╔██║███████║██╔██╗ ██║███████║██║  ███╗█████╗  ██████╔╝${R}`),
+  row(`   ${A}██║╚██╔╝██║██╔══██║██║╚██╗██║██╔══██║██║   ██║██╔══╝  ██╔══██╗${R}`),
+  row(`   ${A}██║ ╚═╝ ██║██║  ██║██║ ╚████║██║  ██║╚██████╔╝███████╗██║  ██║${R}`),
+  row(`   ${S}╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝${R}`),
+  row(""),
+  row(`   ${S}${"░".repeat(62)}${R}`),
+  row(`   ${A}▸${R} ${D}SECURE SHELL INTERFACE v1.0${R}                   ${D}STATUS: ${A}ONLINE${R}`),
+  `${D}  └${"─".repeat(68)}┘${R}`,
+];
 
 export function prompt(question: string, defaultValue?: string): Promise<string> {
   const rl = readline.createInterface({
@@ -34,6 +82,75 @@ export function prompt(question: string, defaultValue?: string): Promise<string>
       rl.close();
       resolve(answer.trim() || defaultValue || "");
     });
+  });
+}
+
+export function promptPassword(question: string, currentlySet = false): Promise<string> {
+  const hint = currentlySet ? ` ${c.dim("(Enter to keep current, 'clear' to remove)")}` : "";
+  process.stdout.write(`  ${question}${hint}: `);
+
+  return new Promise((resolve) => {
+    let buf = "";
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+
+    const onData = (key: Buffer) => {
+      // Strip bracketed paste markers, keep the content between them
+      const str = key.toString().replace(/\x1b\[200~/g, "").replace(/\x1b\[201~/g, "");
+
+      for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+
+        // Ctrl+C
+        if (ch === "\x03") {
+          cleanup();
+          process.stdout.write("\n");
+          resolve("");
+          return;
+        }
+
+        // Enter
+        if (ch === "\r" || ch === "\n") {
+          cleanup();
+          process.stdout.write("\n");
+          resolve(buf);
+          return;
+        }
+
+        // Backspace
+        if (ch === "\x7f" || ch === "\b") {
+          if (buf.length > 0) {
+            buf = buf.slice(0, -1);
+            process.stdout.write("\b \b");
+          }
+          continue;
+        }
+
+        // Other escape sequences (arrow keys etc) — skip CSI sequence
+        if (ch === "\x1b" && i + 1 < str.length && str[i + 1] === "[") {
+          i += 2; // skip ESC and [
+          while (i < str.length && str[i] >= "\x20" && str[i] <= "\x3f") i++; // skip params
+          continue; // skip final byte
+        }
+
+        // Lone escape — ignore
+        if (ch === "\x1b") continue;
+
+        // Printable characters
+        if (ch.charCodeAt(0) >= 32) {
+          buf += ch;
+          process.stdout.write("*");
+        }
+      }
+    };
+
+    const cleanup = () => {
+      process.stdin.removeListener("data", onData);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+    };
+
+    process.stdin.on("data", onData);
   });
 }
 
@@ -57,7 +174,7 @@ export function select(title: string, items: string[]): Promise<number> {
       // Move cursor up to redraw (after first render)
       process.stdout.write(`\x1b[${items.length}A`);
       for (let i = 0; i < items.length; i++) {
-        const prefix = i === cursor ? `${CYAN}❯${RESET} ` : "  ";
+        const prefix = i === cursor ? `${ACCENT_FG}❯${RESET} ` : "  ";
         const label = i === cursor ? `${BOLD}${items[i]}${RESET}` : `${DIM}${items[i]}${RESET}`;
         process.stdout.write(`${CLEAR_LINE}${prefix}${label}\n`);
       }
@@ -69,7 +186,7 @@ export function select(title: string, items: string[]): Promise<number> {
     console.log(`  ${c.dim("↑/↓ to move, Enter to select, Esc to cancel")}`);
     console.log();
     for (let i = 0; i < items.length; i++) {
-      const prefix = i === cursor ? `${CYAN}❯${RESET} ` : "  ";
+      const prefix = i === cursor ? `${ACCENT_FG}❯${RESET} ` : "  ";
       const label = i === cursor ? `${BOLD}${items[i]}${RESET}` : `${DIM}${items[i]}${RESET}`;
       process.stdout.write(`${prefix}${label}\n`);
     }
@@ -124,8 +241,10 @@ export function select(title: string, items: string[]): Promise<number> {
 export function printHeader(): void {
   console.clear();
   console.log();
-  console.log(`  ${c.bold(c.cyan("SSH Manager"))}`);
-  console.log(`  ${c.dim("─".repeat(40))}`);
+  for (const line of BANNER) {
+    console.log(line);
+  }
+  console.log();
 }
 
 export function printSuccess(msg: string): void {

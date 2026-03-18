@@ -1,12 +1,12 @@
 import { existsSync } from "fs";
 import { resolve } from "path";
 import { loadCredentials, saveCredentials, generateId } from "./store";
-import { select, prompt, confirm, printSuccess, printError, c } from "./ui";
+import { select, prompt, promptPassword, confirm, printSuccess, printError, c } from "./ui";
 import type { SSHCredential } from "./types";
 
 function formatCredential(cred: SSHCredential): string {
-  const key = cred.identityFile ? ` 🔑` : "";
-  return `${cred.name} ${c.dim(`(${cred.user}@${cred.host}:${cred.port}${key})`)}`;
+  const auth = cred.identityFile ? " 🔑" : cred.password ? " 🔒" : "";
+  return `${cred.name} ${c.dim(`(${cred.user}@${cred.host}:${cred.port}${auth})`)}`;
 }
 
 export async function connectToServer(): Promise<void> {
@@ -21,32 +21,49 @@ export async function connectToServer(): Promise<void> {
   if (idx === -1) return;
 
   const cred = credentials[idx];
-  const args = ["ssh"];
+  const usePassword = !!cred.password && !cred.identityFile;
+
+  // Check sshpass availability when password auth is needed
+  if (usePassword) {
+    const check = Bun.spawnSync(["which", "sshpass"]);
+    if (check.exitCode !== 0) {
+      printError("sshpass is required for password auth but not installed.");
+      console.log(`  ${c.dim("Install with:")} ${c.accent("brew install hudochenkov/sshpass/sshpass")}`);
+      return;
+    }
+  }
+
+  const sshArgs = ["ssh"];
 
   if (cred.port !== 22) {
-    args.push("-p", String(cred.port));
+    sshArgs.push("-p", String(cred.port));
   }
 
   if (cred.identityFile) {
-    args.push("-i", cred.identityFile);
+    sshArgs.push("-i", cred.identityFile);
   }
 
-  args.push(`${cred.user}@${cred.host}`);
+  sshArgs.push(`${cred.user}@${cred.host}`);
+
+  // Wrap with sshpass if password is set and no key is used
+  const args = usePassword ? ["sshpass", "-e", ...sshArgs] : sshArgs;
+  const env = usePassword ? { ...process.env, SSHPASS: cred.password! } : undefined;
 
   console.log();
-  console.log(`  ${c.dim("$")} ${c.cyan(args.join(" "))}`);
+  console.log(`  ${c.dim("$")} ${c.cyan(sshArgs.join(" "))}${usePassword ? c.dim(" (with password)") : ""}`);
   console.log();
 
-  // Replace the current process with ssh
-  const proc = Bun.spawnSync(args, {
+  const proc = Bun.spawn(args, {
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
+    env,
   });
 
-  // If spawnSync returns, ssh has exited
-  if (proc.exitCode !== 0) {
-    printError(`SSH exited with code ${proc.exitCode}`);
+  const exitCode = await proc.exited;
+
+  if (exitCode !== 0) {
+    printError(`SSH exited with code ${exitCode}`);
   }
 }
 
@@ -92,6 +109,8 @@ export async function addCredential(): Promise<void> {
     }
   }
 
+  const password = await promptPassword("Password (optional)");
+
   const cred: SSHCredential = {
     id: generateId(),
     name,
@@ -99,6 +118,7 @@ export async function addCredential(): Promise<void> {
     user,
     port,
     ...(resolvedKey && { identityFile: resolvedKey }),
+    ...(password && { password }),
   };
 
   credentials.push(cred);
@@ -149,6 +169,16 @@ export async function editCredential(): Promise<void> {
     }
   }
 
+  const passwordInput = await promptPassword("Password", !!cred.password);
+  let password: string | undefined;
+  if (passwordInput === "clear") {
+    password = undefined;
+  } else if (passwordInput === "") {
+    password = cred.password; // keep current
+  } else {
+    password = passwordInput;
+  }
+
   credentials[idx] = {
     ...cred,
     name,
@@ -156,6 +186,7 @@ export async function editCredential(): Promise<void> {
     user,
     port,
     identityFile: resolvedKey,
+    password,
   };
 
   saveCredentials(credentials);

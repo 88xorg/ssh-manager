@@ -15,16 +15,16 @@ jobs:
         include:
           - os: macos-latest
             target: bun-darwin-arm64
-            artifact: ssh-manager-darwin-arm64
+            artifact: sshm-darwin-arm64
           - os: macos-13
             target: bun-darwin-x64
-            artifact: ssh-manager-darwin-x64
+            artifact: sshm-darwin-x64
           - os: ubuntu-latest
             target: bun-linux-x64
-            artifact: ssh-manager-linux-x64
+            artifact: sshm-linux-x64
           - os: ubuntu-latest
             target: bun-linux-arm64
-            artifact: ssh-manager-linux-arm64
+            artifact: sshm-linux-arm64
 
     runs-on: ${{ matrix.os }}
 

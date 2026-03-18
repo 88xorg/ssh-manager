@@ -18,6 +18,7 @@ async function main(): Promise<void> {
     switch (idx) {
       case 0:
         await connectToServer();
+        await pressEnterToContinue();
         break;
       case 1:
         await addCredential();

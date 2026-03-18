@@ -5,6 +5,7 @@ export interface SSHCredential {
   user: string;
   port: number;
   identityFile?: string;
+  password?: string;
 }
 
 export interface CredentialStore {
